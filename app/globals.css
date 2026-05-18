@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: 9 9 11;            /* zinc-950 */
+  --panel: 24 24 27;       /* zinc-900 */
+  --border: 39 39 42;      /* zinc-800 */
+  --text: 244 244 245;     /* zinc-100 */
+  --muted: 161 161 170;    /* zinc-400 */
+  --brand: 99 102 241;     /* indigo-500 */
+  --good: 34 197 94;       /* green-500 */
+  --bad: 239 68 68;        /* red-500 */
+}
+
+html, body { background: rgb(var(--bg)); color: rgb(var(--text)); }
+body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+
+.panel { @apply bg-panel border border-border rounded-xl; }
+.kpi-num { @apply text-2xl font-semibold tabular-nums; }
+.kpi-label { @apply text-xs uppercase tracking-wide text-muted; }
+table.tbl { @apply w-full text-sm; }
+table.tbl th { @apply text-left text-xs uppercase tracking-wide text-muted font-medium px-3 py-2 border-b border-border; }
+table.tbl td { @apply px-3 py-2 border-b border-border/60 tabular-nums; }
+table.tbl tr:hover td { @apply bg-white/5; }
+.btn { @apply inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-1.5 text-sm hover:bg-white/5 disabled:opacity-50; }
+.btn-primary { @apply bg-brand text-white border-brand hover:bg-brand/90; }
+.input { @apply rounded-lg border border-border bg-panel px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-brand; }
