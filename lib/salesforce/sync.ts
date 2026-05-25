@@ -4,10 +4,12 @@ import type { Connection } from "jsforce";
 
 type SyncStats = { agents: number; teams: number; leads: number; bookings: number };
 
-const CAMPAIGN_FIELD = process.env.SF_LEAD_CAMPAIGN_FIELD || "Campaign_Name__c";
-const BOOKING_OBJECT = process.env.SF_BOOKING_OBJECT || "Booking__c";
-const BOOKING_AMOUNT = process.env.SF_BOOKING_AMOUNT_FIELD || "Booking_Price__c";
-const BOOKING_LEAD_LOOKUP = process.env.SF_BOOKING_LEAD_LOOKUP_FIELD || "Lead__c";
+const CAMPAIGN_FIELD      = process.env.SF_LEAD_CAMPAIGN_FIELD           || "Campaign_Name__c";
+const BOOKING_OBJECT      = process.env.SF_BOOKING_OBJECT                 || "Booking__c";
+const BOOKING_AMOUNT      = process.env.SF_BOOKING_AMOUNT_FIELD           || "Booking_Price__c";
+const BOOKING_LEAD_LOOKUP = process.env.SF_BOOKING_LEAD_LOOKUP_FIELD      || "Lead__c";
+const GROSS_COMMISSION    = process.env.SF_BOOKING_GROSS_COMMISSION_FIELD  || "Gross_Commission__c";
+const NET_COMMISSION      = process.env.SF_BOOKING_NET_COMMISSION_FIELD    || "Net_Commission__c";
 
 // Which LeadSource values count as "Facebook". Comma-separated, default = Facebook only.
 const LEAD_SOURCES = (process.env.SF_LEAD_SOURCE_FILTER || "Facebook")
@@ -139,7 +141,7 @@ export async function syncSalesforce(): Promise<SyncStats> {
 
   // --- Bookings, paginated -------------------------------------------------
   const bookingSoql = `
-    SELECT Id, ${BOOKING_LEAD_LOOKUP}, OwnerId, ${BOOKING_AMOUNT}, CreatedDate
+    SELECT Id, ${BOOKING_LEAD_LOOKUP}, OwnerId, ${BOOKING_AMOUNT}, ${GROSS_COMMISSION}, ${NET_COMMISSION}, CreatedDate
     FROM ${BOOKING_OBJECT}
   `;
   type BookingRow = { Id: string; OwnerId: string; CreatedDate: string; [k: string]: any };
@@ -178,7 +180,9 @@ export async function syncSalesforce(): Promise<SyncStats> {
             id: b.Id,
             lead_id: lookup && knownLeads.has(lookup) ? lookup : null,
             agent_id: b.OwnerId && knownAgents.has(b.OwnerId) ? b.OwnerId : null,
-            sale_amount: Number(b[BOOKING_AMOUNT] ?? 0),
+            sale_amount:       Number(b[BOOKING_AMOUNT]    ?? 0),
+            gross_commission:  Number(b[GROSS_COMMISSION]  ?? 0),
+            net_commission:    Number(b[NET_COMMISSION]     ?? 0),
             booked_at: b.CreatedDate,
             status: "Booked",
           };

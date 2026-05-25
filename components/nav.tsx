@@ -2,13 +2,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Megaphone, Users2, Building2, Settings, LogOut } from "lucide-react";
+import { BarChart3, Megaphone, Users2, Building2, TrendingUp, Settings, LogOut } from "lucide-react";
 
 const links = [
-  { href: "/dashboard", label: "Overview", icon: BarChart3 },
-  { href: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
-  { href: "/dashboard/agents", label: "Agents", icon: Users2 },
-  { href: "/dashboard/teams", label: "Teams", icon: Building2 },
+  { href: "/dashboard",             label: "Overview",    icon: BarChart3 },
+  { href: "/dashboard/campaigns",   label: "Campaigns",   icon: Megaphone },
+  { href: "/dashboard/agents",      label: "Agents",      icon: Users2 },
+  { href: "/dashboard/teams",       label: "Teams",       icon: Building2 },
+  { href: "/dashboard/performance", label: "Performance", icon: TrendingUp },
   { href: "/dashboard/settings/integrations", label: "Integrations", icon: Settings },
 ];
 

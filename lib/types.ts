@@ -58,3 +58,23 @@ export type AgentRow = {
   cpl: number;
   roas: number;
 };
+
+/**
+ * One row in the Performance dashboard — used for both the monthly summary
+ * (parent) and the individual-campaign breakdown (child).
+ *
+ * `label` holds the display value for the first column:
+ *   parent row → "Jan 2025"
+ *   child row  → campaign name
+ */
+export type PerformanceRow = {
+  label: string;
+  spend: number;
+  leads: number;
+  cpl: number;              // spend / leads
+  unit_price: number;       // sum of Booking_Price__c (value of units sold)
+  gross_commission: number; // sum of Gross_Commission__c
+  net_commission: number;   // sum of Net_Commission__c  (Allegiance share)
+  pnl: number;              // net_commission − spend
+  roi: number;              // pnl / spend  (decimal: 0.5 = 50 %)
+};

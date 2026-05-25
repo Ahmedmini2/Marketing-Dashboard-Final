@@ -45,12 +45,15 @@ export function GroupedDataTable<T extends Record<string, any>>({
   empty = "No data",
   pageSize = 25,
   parentLabelHeader = "Campaign",
+  childLabel = "form",
 }: {
   groups: Group<T>[];
   columns: Column<T>[];
   empty?: string;
   pageSize?: number;
   parentLabelHeader?: string;
+  /** Singular noun used in the child-count badge, e.g. "campaign" → "2 campaigns" */
+  childLabel?: string;
 }) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -167,7 +170,7 @@ export function GroupedDataTable<T extends Record<string, any>>({
                         {/* Show child count next to first column on the parent row */}
                         {c === columns[0] && (
                           <span className="text-muted text-xs ml-2">
-                            ({group.children.length} form{group.children.length === 1 ? "" : "s"})
+                            ({group.children.length} {childLabel}{group.children.length === 1 ? "" : "s"})
                           </span>
                         )}
                       </td>

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import type { AgentRow, CampaignRow, DateRange, KpiSummary } from "@/lib/types";
+import type { AgentRow, CampaignRow, DateRange, KpiSummary, PerformanceRow } from "@/lib/types";
+import type { Group } from "@/components/grouped-data-table";
 import type { SortKey } from "@/lib/filters";
 
 type Filters = {
@@ -140,6 +141,143 @@ export function byTeam(agents: AgentRow[]): AgentRow[] {
     r.roas = r.spend ? r.revenue / r.spend : 0;
   }
   return result.sort((a, b) => b.revenue - a.revenue);
+}
+
+// =========================================================================
+// Performance Dashboard
+// =========================================================================
+
+/**
+ * Fetch per-campaign-per-month performance rows from the `dashboard_performance`
+ * Postgres function, then group them into Event and Non-Event month groups.
+ */
+export async function fetchPerformance(range: DateRange): Promise<{
+  eventGroups: Group<PerformanceRow>[];
+  nonEventGroups: Group<PerformanceRow>[];
+}> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_performance", {
+    p_from: range.from,
+    p_to: `${range.to}T23:59:59.999Z`,
+  });
+  if (error) throw new Error(`dashboard_performance: ${error.message}`);
+
+  // Raw rows from Postgres — one per (month × campaign_name)
+  type RawRow = {
+    month: string;
+    campaign_name: string;
+    event_type: "event" | "non_event";
+    spend: number;
+    leads: number;
+    cpl: number;
+    unit_price: number;
+    gross_commission: number;
+    net_commission: number;
+    pnl: number;
+    roi: number;
+  };
+
+  const rows: RawRow[] = ((data ?? []) as any[]).map((r) => ({
+    month:            String(r.month ?? ""),
+    campaign_name:    String(r.campaign_name ?? "(unknown)"),
+    event_type:       r.event_type === "non_event" ? "non_event" : "event",
+    spend:            Number(r.spend            ?? 0),
+    leads:            Number(r.leads            ?? 0),
+    cpl:              Number(r.cpl              ?? 0),
+    unit_price:       Number(r.unit_price       ?? 0),
+    gross_commission: Number(r.gross_commission ?? 0),
+    net_commission:   Number(r.net_commission   ?? 0),
+    pnl:              Number(r.pnl              ?? 0),
+    roi:              Number(r.roi              ?? 0),
+  }));
+
+  return groupPerformanceByMonth(rows);
+}
+
+/** Convert "YYYY-MM" → "Jan 2025" */
+function monthLabel(yyyymm: string): string {
+  const [y, m] = yyyymm.split("-");
+  if (!y || !m) return yyyymm;
+  return new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-US", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function zeroParent(label: string): PerformanceRow {
+  return {
+    label,
+    spend: 0, leads: 0, cpl: 0,
+    unit_price: 0, gross_commission: 0, net_commission: 0,
+    pnl: 0, roi: 0,
+  };
+}
+
+function groupPerformanceByMonth(
+  rows: Array<{
+    month: string;
+    campaign_name: string;
+    event_type: "event" | "non_event";
+    spend: number;
+    leads: number;
+    cpl: number;
+    unit_price: number;
+    gross_commission: number;
+    net_commission: number;
+    pnl: number;
+    roi: number;
+  }>
+): { eventGroups: Group<PerformanceRow>[]; nonEventGroups: Group<PerformanceRow>[] } {
+  const eventMap    = new Map<string, Group<PerformanceRow>>();
+  const nonEventMap = new Map<string, Group<PerformanceRow>>();
+
+  for (const r of rows) {
+    const map = r.event_type === "event" ? eventMap : nonEventMap;
+
+    let g = map.get(r.month);
+    if (!g) {
+      g = { key: r.month, parent: zeroParent(monthLabel(r.month)), children: [] };
+      map.set(r.month, g);
+    }
+
+    // Child = individual campaign row
+    g.children.push({
+      label:            r.campaign_name,
+      spend:            r.spend,
+      leads:            r.leads,
+      cpl:              r.cpl,
+      unit_price:       r.unit_price,
+      gross_commission: r.gross_commission,
+      net_commission:   r.net_commission,
+      pnl:              r.pnl,
+      roi:              r.roi,
+    });
+
+    // Accumulate parent totals
+    const p = g.parent;
+    p.spend            += r.spend;
+    p.leads            += r.leads;
+    p.unit_price       += r.unit_price;
+    p.gross_commission += r.gross_commission;
+    p.net_commission   += r.net_commission;
+  }
+
+  // Recalculate derived fields on parent (CPL, P&L, ROI)
+  function finalise(g: Group<PerformanceRow>): Group<PerformanceRow> {
+    const p = g.parent;
+    p.cpl = p.leads > 0 ? p.spend / p.leads : 0;
+    p.pnl = p.net_commission - p.spend;
+    p.roi = p.spend > 0 ? p.pnl / p.spend : 0;
+    return g;
+  }
+
+  const sort = (a: Group<PerformanceRow>, b: Group<PerformanceRow>) =>
+    b.key.localeCompare(a.key); // newest month first
+
+  return {
+    eventGroups:    [...eventMap.values()].map(finalise).sort(sort),
+    nonEventGroups: [...nonEventMap.values()].map(finalise).sort(sort),
+  };
 }
 
 // Group forms under their parent Meta campaign. AED-normalised parent rows.
