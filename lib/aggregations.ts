@@ -1,5 +1,16 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import type { AgentRow, CampaignRow, DateRange, KpiSummary, PerformanceRow } from "@/lib/types";
+import type {
+  AgentRow,
+  CampaignRow,
+  DateRange,
+  KpiSummary,
+  PerformanceRow,
+  PerfSummary,
+  PerfMonthStats,
+  PerfTopAgent,
+  PerfTopCampaign,
+  PerfMonthlyTrendPoint,
+} from "@/lib/types";
 import type { Group } from "@/components/grouped-data-table";
 import type { SortKey } from "@/lib/filters";
 
@@ -278,6 +289,121 @@ function groupPerformanceByMonth(
     eventGroups:    [...eventMap.values()].map(finalise).sort(sort),
     nonEventGroups: [...nonEventMap.values()].map(finalise).sort(sort),
   };
+}
+
+// =========================================================================
+// Performance dashboard v2 — summary cards, current-month stats, top agents,
+// top campaigns, and monthly trend (RPCs in 0005_performance_dashboard.sql).
+// =========================================================================
+
+const FAR_PAST = "1970-01-01T00:00:00.000Z";
+const FAR_FUTURE = "2999-12-31T23:59:59.999Z";
+
+/** All-time totals (the 4 hero cards on the Performance page). */
+export async function fetchPerfSummary(): Promise<PerfSummary> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_perf_summary", {
+    p_from: FAR_PAST,
+    p_to: FAR_FUTURE,
+  });
+  if (error) throw new Error(`dashboard_perf_summary: ${error.message}`);
+  const r = (data ?? [])[0] ?? {};
+  return {
+    spend:    Number(r.spend    ?? 0),
+    revenue:  Number(r.revenue  ?? 0),
+    pnl:      Number(r.pnl      ?? 0),
+    roas:     Number(r.roas     ?? 0),
+    leads:    Number(r.leads    ?? 0),
+    bookings: Number(r.bookings ?? 0),
+  };
+}
+
+/** Stats for one calendar month — used by the "Current Month" section. */
+export async function fetchPerfMonthStats(
+  year: number,
+  month: number, // 1-12
+): Promise<PerfMonthStats> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_perf_month_stats", {
+    p_year: year,
+    p_month: month,
+  });
+  if (error) throw new Error(`dashboard_perf_month_stats: ${error.message}`);
+  const r = (data ?? [])[0] ?? {};
+  return {
+    spend:               Number(r.spend               ?? 0),
+    revenue:             Number(r.revenue             ?? 0),
+    pnl:                 Number(r.pnl                 ?? 0),
+    roas:                Number(r.roas                ?? 0),
+    leads:               Number(r.leads               ?? 0),
+    bookings:            Number(r.bookings            ?? 0),
+    event_campaigns:     Number(r.event_campaigns     ?? 0),
+    non_event_campaigns: Number(r.non_event_campaigns ?? 0),
+  };
+}
+
+/** Top agents this month, ranked by bookings (BNL) then revenue. */
+export async function fetchPerfTopAgents(
+  year: number,
+  month: number,
+  limit = 10,
+): Promise<PerfTopAgent[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_perf_top_agents", {
+    p_year: year,
+    p_month: month,
+    p_limit: limit,
+  });
+  if (error) throw new Error(`dashboard_perf_top_agents: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    agent_id:   r.agent_id ?? null,
+    agent_name: r.agent_name ?? null,
+    team_name:  r.team_name ?? null,
+    bookings:   Number(r.bookings ?? 0),
+    revenue:    Number(r.revenue  ?? 0),
+    leads:      Number(r.leads    ?? 0),
+  } satisfies PerfTopAgent));
+}
+
+/** Best-performing campaigns this month, ranked by P&L. */
+export async function fetchPerfTopCampaigns(
+  year: number,
+  month: number,
+  limit = 8,
+): Promise<PerfTopCampaign[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_perf_top_campaigns", {
+    p_year: year,
+    p_month: month,
+    p_limit: limit,
+  });
+  if (error) throw new Error(`dashboard_perf_top_campaigns: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    campaign_name: String(r.campaign_name ?? "(unknown)"),
+    event_type:    r.event_type === "non_event" ? "non_event" : "event",
+    spend:         Number(r.spend   ?? 0),
+    revenue:       Number(r.revenue ?? 0),
+    pnl:           Number(r.pnl     ?? 0),
+    roas:          Number(r.roas    ?? 0),
+    leads:         Number(r.leads   ?? 0),
+  } satisfies PerfTopCampaign));
+}
+
+/** Monthly trend (default last 12 months) for the spend/revenue/P&L chart. */
+export async function fetchPerfMonthlyTrend(
+  months = 12,
+): Promise<PerfMonthlyTrendPoint[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_perf_monthly_trend", {
+    p_months: months,
+  });
+  if (error) throw new Error(`dashboard_perf_monthly_trend: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    month:   String(r.month ?? ""),
+    spend:   Number(r.spend   ?? 0),
+    revenue: Number(r.revenue ?? 0),
+    pnl:     Number(r.pnl     ?? 0),
+  } satisfies PerfMonthlyTrendPoint));
 }
 
 // Group forms under their parent Meta campaign. AED-normalised parent rows.

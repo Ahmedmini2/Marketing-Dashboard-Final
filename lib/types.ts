@@ -78,3 +78,47 @@ export type PerformanceRow = {
   pnl: number;              // net_commission − spend
   roi: number;              // pnl / spend  (decimal: 0.5 = 50 %)
 };
+
+// =========================================================================
+// Performance dashboard v2 (RPCs in 0005_performance_dashboard.sql)
+// =========================================================================
+
+export type PerfSummary = {
+  spend: number;
+  revenue: number;          // sum(net_commission)
+  pnl: number;              // revenue − spend
+  roas: number;             // revenue / spend (ratio, 1.5 = 1.5x)
+  leads: number;
+  bookings: number;
+};
+
+export type PerfMonthStats = PerfSummary & {
+  event_campaigns: number;
+  non_event_campaigns: number;
+};
+
+export type PerfTopAgent = {
+  agent_id: string | null;
+  agent_name: string | null;
+  team_name: string | null;
+  bookings: number;
+  revenue: number;
+  leads: number;
+};
+
+export type PerfTopCampaign = {
+  campaign_name: string;
+  event_type: "event" | "non_event";
+  spend: number;
+  revenue: number;
+  pnl: number;
+  roas: number;
+  leads: number;
+};
+
+export type PerfMonthlyTrendPoint = {
+  month: string;            // "YYYY-MM"
+  spend: number;
+  revenue: number;
+  pnl: number;
+};

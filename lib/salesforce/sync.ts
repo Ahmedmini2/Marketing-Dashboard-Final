@@ -8,8 +8,8 @@ const CAMPAIGN_FIELD      = process.env.SF_LEAD_CAMPAIGN_FIELD           || "Cam
 const BOOKING_OBJECT      = process.env.SF_BOOKING_OBJECT                 || "Booking__c";
 const BOOKING_AMOUNT      = process.env.SF_BOOKING_AMOUNT_FIELD           || "Booking_Price__c";
 const BOOKING_LEAD_LOOKUP = process.env.SF_BOOKING_LEAD_LOOKUP_FIELD      || "Lead__c";
-const GROSS_COMMISSION    = process.env.SF_BOOKING_GROSS_COMMISSION_FIELD  || "Gross_Commission__c";
-const NET_COMMISSION      = process.env.SF_BOOKING_NET_COMMISSION_FIELD    || "Net_Commission__c";
+const GROSS_COMMISSION    = process.env.SF_BOOKING_GROSS_COMMISSION_FIELD  || "Total_Commission_Amount__c";
+const NET_COMMISSION      = process.env.SF_BOOKING_NET_COMMISSION_FIELD    || "Total_Allegiance_Commission__c";
 
 // Which LeadSource values count as "Facebook". Comma-separated, default = Facebook only.
 const LEAD_SOURCES = (process.env.SF_LEAD_SOURCE_FILTER || "Facebook")

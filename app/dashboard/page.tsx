@@ -1,64 +1,140 @@
-import { FilterBar } from "@/components/filter-bar";
 import { KpiCard } from "@/components/kpi-card";
-import { TrendChart } from "@/components/trend-chart";
 import { SyncButton } from "@/components/sync-button";
-import { GroupedDataTable } from "@/components/grouped-data-table";
-import { type Column } from "@/components/data-table";
-import { parseFilters, type SearchParams } from "@/lib/filters";
-import { fetchCampaigns, fetchKpi, groupByMetaCampaign } from "@/lib/aggregations";
-import { getLastSync, loadFilterOptions } from "@/lib/filter-options";
-import { fmtMoney, fmtNum, fmtPct } from "@/lib/utils";
-import type { CampaignRow } from "@/lib/types";
+import { TopAgentsChart } from "@/components/top-agents-chart";
+import { TopCampaignsChart } from "@/components/top-campaigns-chart";
+import { PerformanceTrendChart } from "@/components/performance-trend-chart";
+import {
+  fetchPerfSummary,
+  fetchPerfMonthStats,
+  fetchPerfTopAgents,
+  fetchPerfTopCampaigns,
+  fetchPerfMonthlyTrend,
+} from "@/lib/aggregations";
+import { getLastSync } from "@/lib/filter-options";
+import { fmtMoney, fmtNum } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
-export default async function OverviewPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
-  const sp = await searchParams;
-  const filters = parseFilters(sp);
-  const [kpi, forms, opts, lastSync] = await Promise.all([
-    fetchKpi(filters),
-    fetchCampaigns(filters),
-    loadFilterOptions(),
+function roasLabel(r: number) {
+  return Number.isFinite(r) ? `${r.toFixed(2)}x` : "0.00x";
+}
+
+export default async function OverviewPage() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1;
+  const currentMonthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+
+  const [summary, monthStats, topAgents, topCampaigns, trend, lastSync] = await Promise.all([
+    fetchPerfSummary(),
+    fetchPerfMonthStats(year, month),
+    fetchPerfTopAgents(year, month, 10),
+    fetchPerfTopCampaigns(year, month, 8),
+    fetchPerfMonthlyTrend(12),
     getLastSync(),
   ]);
 
-  const k = kpi.summary;
-  const groups = groupByMetaCampaign(forms).slice(0, 8);
-
-  const cols: Column<CampaignRow>[] = [
-    { key: "form_name",     header: "Form Name" },
-    { key: "leads",         header: "Leads",    align: "right", format: "num" },
-    { key: "bookings",      header: "Bookings", align: "right", format: "num" },
-    { key: "spend",         header: "Spend",    align: "right", format: "money",    currencyKey: "currency" },
-    { key: "revenue",       header: "Revenue",  align: "right", format: "money",    currencyKey: "currency" },
-    { key: "profit",        header: "P&L",      align: "right", format: "money_pl", currencyKey: "currency" },
-  ];
-
   return (
     <>
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Overview</h1>
-          <p className="text-sm text-muted">Revenue & P&L across Meta spend and Salesforce outcomes.</p>
+          <p className="text-sm text-muted mt-0.5">
+            Revenue = Net Commission · P&amp;L = Net Commission − Spend · ROAS = Revenue ÷ Spend
+          </p>
         </div>
         <SyncButton lastSyncedAt={lastSync} />
       </div>
 
-      <FilterBar campaigns={opts.campaigns} agents={opts.agents} teams={opts.teams} />
+      {/* ── 1. All-Time Totals (4 hero cards) ── */}
+      <section className="space-y-2">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/10 px-3 py-1 text-xs font-medium text-indigo-400 ring-1 ring-indigo-500/20">
+            ✨ All-Time Totals
+          </span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <KpiCard
+            label="Total Spend"
+            value={fmtMoney(summary.spend)}
+            sub={`${fmtNum(summary.leads)} leads attributed`}
+          />
+          <KpiCard
+            label="Total Revenue"
+            value={fmtMoney(summary.revenue)}
+            sub={`${fmtNum(summary.bookings)} bookings · Net Commission`}
+          />
+          <KpiCard
+            label="Total P&L"
+            value={fmtMoney(summary.pnl)}
+            tone={summary.pnl >= 0 ? "good" : "bad"}
+            sub="Revenue − Spend"
+          />
+          <KpiCard
+            label="Total ROAS"
+            value={roasLabel(summary.roas)}
+            sub={`${(summary.roas * 100).toFixed(0)}% return on spend`}
+          />
+        </div>
+      </section>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KpiCard label="Spend" value={fmtMoney(k.spend)} sub="Attributed from Meta (AED)" />
-        <KpiCard label="Revenue" value={fmtMoney(k.revenue)} sub={`${fmtNum(k.bookings)} bookings`} />
-        <KpiCard label="Profit / Loss" value={fmtMoney(k.profit)} tone={k.profit >= 0 ? "good" : "bad"} sub={fmtPct(k.margin) + " margin"} />
-        <KpiCard label="ROAS" value={k.roas.toFixed(2) + "x"} sub={`${fmtMoney(k.cpl)} CPL · ${fmtNum(k.leads)} leads`} />
-      </div>
+      {/* ── 2. Current Month Statistics ── */}
+      <section className="space-y-2">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-emerald-500/20">
+            📅 {currentMonthLabel}
+          </span>
+          <span className="text-xs text-muted">
+            {fmtNum(monthStats.leads)} leads · {fmtNum(monthStats.bookings)} bookings
+          </span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <KpiCard label="Spend" value={fmtMoney(monthStats.spend)} sub="this month" />
+          <KpiCard
+            label="Non-Event Campaigns"
+            value={fmtNum(monthStats.non_event_campaigns)}
+            sub="active this month"
+          />
+          <KpiCard
+            label="Event Campaigns"
+            value={fmtNum(monthStats.event_campaigns)}
+            sub="active this month"
+          />
+          <KpiCard
+            label="Revenue"
+            value={fmtMoney(monthStats.revenue)}
+            sub="Net Commission"
+          />
+          <KpiCard
+            label="P&L"
+            value={fmtMoney(monthStats.pnl)}
+            tone={monthStats.pnl >= 0 ? "good" : "bad"}
+            sub="this month"
+          />
+          <KpiCard
+            label="ROAS"
+            value={roasLabel(monthStats.roas)}
+            sub="this month"
+          />
+        </div>
+      </section>
 
-      <TrendChart data={kpi.trend} />
+      {/* ── 3. KPI Charts (no tables) ── */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-500/10 px-3 py-1 text-xs font-medium text-violet-400 ring-1 ring-violet-500/20">
+            🎯 KPIs · {currentMonthLabel}
+          </span>
+        </div>
 
-      <div>
-        <h2 className="text-sm uppercase tracking-wide text-muted mb-2">Top campaigns</h2>
-        <GroupedDataTable groups={groups} columns={cols} parentLabelHeader="Campaign" pageSize={8} />
-      </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <TopAgentsChart agents={topAgents} />
+          <TopCampaignsChart campaigns={topCampaigns} />
+        </div>
+
+        <PerformanceTrendChart data={trend} />
+      </section>
     </>
   );
 }
