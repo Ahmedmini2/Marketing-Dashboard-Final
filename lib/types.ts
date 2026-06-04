@@ -122,3 +122,33 @@ export type PerfMonthlyTrendPoint = {
   revenue: number;
   pnl: number;
 };
+
+// ---- Accounts tab -------------------------------------------------------
+export type PerfAccount = {
+  account_id: string;
+  account_name: string;
+  currency: string | null;
+  spend: number;            // AED
+  revenue: number;          // Net Commission
+  pnl: number;
+  roas: number;
+  leads: number;
+  bookings: number;
+  campaigns: number;
+  accessible: boolean;      // false → token can't see it / not yet synced
+};
+
+export type PerfAccountCampaign = {
+  campaign_id: string;
+  campaign_name: string;
+  status: string | null;
+  event_type: "event" | "non_event";
+  spend: number;            // AED, real Meta spend
+  meta_leads: number;       // Meta-reported leads
+  sf_leads: number;         // Salesforce leads matched to this campaign
+  bookings: number;
+  revenue: number;          // Net Commission
+  pnl: number;
+  roas: number;
+  cpl: number;
+};

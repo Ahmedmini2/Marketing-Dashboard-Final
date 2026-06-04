@@ -16,6 +16,9 @@ export class MetaApiError extends Error {
 // Meta error codes that are transient and worth retrying.
 // https://developers.facebook.com/docs/graph-api/guides/error-handling/
 const TRANSIENT_CODES = new Set([1, 2, 4, 17, 341, 368, 613]);
+// App / user / account rate-limit codes — need long, patient backoff (the
+// limit resets on a rolling window, typically within a few minutes).
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80000, 80003, 80004]);
 
 async function fetchJson<T>(url: string, token: string, attempt = 1): Promise<T> {
   const u = new URL(url);
@@ -37,11 +40,16 @@ async function fetchJson<T>(url: string, token: string, attempt = 1): Promise<T>
 
   if (!res.ok) {
     const code = body?.error?.code;
+    const isRateLimit = typeof code === "number" && RATE_LIMIT_CODES.has(code);
     const transient = res.status >= 500 || (typeof code === "number" && TRANSIENT_CODES.has(code));
-    if (transient && attempt < 6) {
-      // Backoff: 1s, 3s, 9s, 27s, 60s (capped)
-      const wait = Math.min(60000, 1000 * 3 ** (attempt - 1));
-      console.warn(`[meta] transient error attempt=${attempt} status=${res.status} code=${code} msg=${body?.error?.message ?? "?"} → backoff ${wait}ms`);
+    // Rate limits get a longer, patient schedule (30s,60s,90s,120s,120s…, up to
+    // 10 tries); other transient errors a short exponential one (up to 6 tries).
+    const maxAttempts = isRateLimit ? 10 : 6;
+    if (transient && attempt < maxAttempts) {
+      const wait = isRateLimit
+        ? Math.min(120000, 30000 * attempt)
+        : Math.min(60000, 1000 * 3 ** (attempt - 1));
+      console.warn(`[meta] ${isRateLimit ? "rate-limit" : "transient"} error attempt=${attempt} status=${res.status} code=${code} msg=${body?.error?.message ?? "?"} → backoff ${wait}ms`);
       await new Promise((r) => setTimeout(r, wait));
       return fetchJson<T>(url, token, attempt + 1);
     }
@@ -165,11 +173,14 @@ export async function listPageLeadForms(pageId: string, pageToken: string): Prom
 }
 
 /**
- * Pull campaign-level insights for a date range. No `time_increment` →
- * returns ONE row per campaign with totals across the whole window.
- * Much cheaper than daily for "all-time" pulls.
+ * Pull campaign-level insights for a date range, broken down BY MONTH
+ * (`time_increment=monthly`). Returns one row per (campaign × month) with
+ * `date_start` = first day of the month. This monthly grain is what gives the
+ * dashboard real per-month / per-account / per-campaign spend — without it,
+ * Meta collapses the whole window into a single lump row and current-month
+ * spend is impossible to report.
  */
-export async function getDailyCampaignInsights(
+export async function getCampaignInsightsMonthly(
   accountId: string,
   token: string,
   since: string,
@@ -182,6 +193,7 @@ export async function getDailyCampaignInsights(
   );
   url.searchParams.set("level", "campaign");
   url.searchParams.set("time_range", JSON.stringify({ since, until }));
+  url.searchParams.set("time_increment", "monthly");
   url.searchParams.set("limit", "500");
 
   const out: FormInsight[] = [];

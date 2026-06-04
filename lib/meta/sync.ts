@@ -2,13 +2,18 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 import {
   listAdAccounts,
   listCampaigns,
-  getDailyCampaignInsights,
+  getCampaignInsightsMonthly,
   leadsFromActions,
   listPagesWithTokens,
   listPageLeadForms,
   getAdAccount,
 } from "./client";
 import { todayISO } from "@/lib/utils";
+
+/** Normalise a Meta date_start ("YYYY-MM-DD") to the first of its month. */
+function monthStart(dateStr: string): string {
+  return `${(dateStr ?? "").slice(0, 7)}-01`;
+}
 
 type SyncStats = {
   ad_accounts: number;
@@ -18,12 +23,6 @@ type SyncStats = {
   form_campaign_matches: number;
   account_errors: Record<string, string>;
 };
-
-const LEAD_OBJECTIVES = new Set([
-  "OUTCOME_LEADS",
-  "LEAD_GENERATION",
-  "LEADS",
-]);
 
 /**
  * Sync Meta data into Supabase.
@@ -72,6 +71,10 @@ export async function syncMeta(opts?: { since?: string; until?: string }): Promi
   };
 
   // 1) Per-account: insights + campaigns + insight rows.
+  // Each account replaces only its OWN insight rows after a successful pull, so
+  // a rate-limited/failed account keeps its previous data instead of emptying.
+  // Monthly upserts are idempotent (keyed by campaign_id + month), so re-runs
+  // are safe. A small pause between accounts keeps us under Meta's app rate cap.
   for (const acct of accounts) {
     try {
       await syncOneAccount(acct, token, since, until, db, stats);
@@ -79,6 +82,7 @@ export async function syncMeta(opts?: { since?: string; until?: string }): Promi
     } catch (e: any) {
       stats.account_errors[acct.id] = e?.message ?? String(e);
     }
+    await new Promise((r) => setTimeout(r, 1500));
   }
 
   // 2) Pages → real lead forms.
@@ -125,7 +129,7 @@ async function syncOneAccount(
     last_synced_at: new Date().toISOString(),
   });
 
-  const insights = await getDailyCampaignInsights(acct.id, token, since, until);
+  const insights = await getCampaignInsightsMonthly(acct.id, token, since, until);
   const campaigns = await listCampaigns(acct.id, token);
 
   if (campaigns.length) {
@@ -142,18 +146,39 @@ async function syncOneAccount(
     stats.campaigns += campaigns.length;
   }
 
-  // Lead-gen campaign ids — used to filter insights to relevant rows only.
-  const leadCampaignSet = new Set(campaigns.filter((c) => c.objective && LEAD_OBJECTIVES.has(c.objective)).map((c) => c.id));
+  // Insights can reference campaigns that listCampaigns no longer returns
+  // (archived/deleted campaigns that still had historical spend). Those ids must
+  // exist in meta_campaigns or the FK rejects the whole insert batch — so upsert
+  // a lightweight stub (id, name, account) for any unknown campaign id. This
+  // also lets their spend be attributed to the right account.
+  const knownIds = new Set(campaigns.map((c) => c.id));
+  const stubs = new Map<string, { id: string; ad_account_id: string; name: string }>();
+  for (const ins of insights) {
+    if (ins.campaign_id && !knownIds.has(ins.campaign_id) && !stubs.has(ins.campaign_id)) {
+      stubs.set(ins.campaign_id, {
+        id: ins.campaign_id,
+        ad_account_id: acct.id,
+        name: ins.campaign_name || ins.campaign_id,
+      });
+    }
+  }
+  if (stubs.size) {
+    const { error } = await db.from("meta_campaigns").upsert([...stubs.values()]);
+    if (error) stats.account_errors[`${acct.id}:stub_campaigns`] = error.message;
+    else stats.campaigns += stubs.size;
+  }
 
-  // Insights are stored keyed by campaign_id (form_id = campaign_id). The FK
-  // on meta_form_insights.form_id was dropped — views compute per-form spend
-  // by joining meta_lead_forms.primary_campaign_id → meta_form_insights.campaign_id.
+  // Store ALL campaigns' monthly spend so account/overview totals reflect true
+  // ad spend (not just lead-gen). Attribution to SF leads naturally only uses
+  // campaigns whose names match a Salesforce Campaign_Name__c. Insights are
+  // keyed by campaign_id (form_id mirrors it for the legacy unique key); `date`
+  // is normalised to the first of the month.
   const rows = insights
-    .filter((ins) => ins.campaign_id && leadCampaignSet.has(ins.campaign_id))
+    .filter((ins) => ins.campaign_id)
     .map((ins) => ({
       form_id: ins.campaign_id!,
       campaign_id: ins.campaign_id!,
-      date: ins.date_start,
+      date: monthStart(ins.date_start),
       spend: Number(ins.spend ?? 0),
       impressions: Number(ins.impressions ?? 0),
       clicks: Number(ins.clicks ?? 0),
@@ -161,7 +186,16 @@ async function syncOneAccount(
     }));
 
   if (rows.length) {
-    await db.from("meta_form_insights").upsert(rows, { onConflict: "form_id,campaign_id,date" });
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await db
+        .from("meta_form_insights")
+        .upsert(rows.slice(i, i + CHUNK), { onConflict: "form_id,campaign_id,date" });
+      if (error) {
+        stats.account_errors[`${acct.id}:insights`] = error.message;
+        break;
+      }
+    }
     stats.insight_rows += rows.length;
   }
 }

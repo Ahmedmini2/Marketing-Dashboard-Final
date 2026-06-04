@@ -10,6 +10,8 @@ import type {
   PerfTopAgent,
   PerfTopCampaign,
   PerfMonthlyTrendPoint,
+  PerfAccount,
+  PerfAccountCampaign,
 } from "@/lib/types";
 import type { Group } from "@/components/grouped-data-table";
 import type { SortKey } from "@/lib/filters";
@@ -404,6 +406,61 @@ export async function fetchPerfMonthlyTrend(
     revenue: Number(r.revenue ?? 0),
     pnl:     Number(r.pnl     ?? 0),
   } satisfies PerfMonthlyTrendPoint));
+}
+
+// =========================================================================
+// Accounts tab
+// =========================================================================
+
+/** Per-account rollup over a date window (defaults to all-time). */
+export async function fetchAccounts(range?: DateRange): Promise<PerfAccount[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_accounts", {
+    p_from: range?.from ?? FAR_PAST,
+    p_to: range ? `${range.to}T23:59:59.999Z` : FAR_FUTURE,
+  });
+  if (error) throw new Error(`dashboard_accounts: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    account_id:   String(r.account_id ?? ""),
+    account_name: String(r.account_name ?? r.account_id ?? "(unknown)"),
+    currency:     r.currency ?? null,
+    spend:        Number(r.spend    ?? 0),
+    revenue:      Number(r.revenue  ?? 0),
+    pnl:          Number(r.pnl      ?? 0),
+    roas:         Number(r.roas     ?? 0),
+    leads:        Number(r.leads    ?? 0),
+    bookings:     Number(r.bookings ?? 0),
+    campaigns:    Number(r.campaigns ?? 0),
+    accessible:   Boolean(r.accessible),
+  } satisfies PerfAccount));
+}
+
+/** Campaigns within one account over a date window (defaults to all-time). */
+export async function fetchAccountCampaigns(
+  accountId: string,
+  range?: DateRange,
+): Promise<PerfAccountCampaign[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_account_campaigns", {
+    p_account_id: accountId,
+    p_from: range?.from ?? FAR_PAST,
+    p_to: range ? `${range.to}T23:59:59.999Z` : FAR_FUTURE,
+  });
+  if (error) throw new Error(`dashboard_account_campaigns: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    campaign_id:   String(r.campaign_id ?? ""),
+    campaign_name: String(r.campaign_name ?? "(unknown)"),
+    status:        r.status ?? null,
+    event_type:    r.event_type === "non_event" ? "non_event" : "event",
+    spend:         Number(r.spend      ?? 0),
+    meta_leads:    Number(r.meta_leads ?? 0),
+    sf_leads:      Number(r.sf_leads   ?? 0),
+    bookings:      Number(r.bookings   ?? 0),
+    revenue:       Number(r.revenue    ?? 0),
+    pnl:           Number(r.pnl        ?? 0),
+    roas:          Number(r.roas       ?? 0),
+    cpl:           Number(r.cpl        ?? 0),
+  } satisfies PerfAccountCampaign));
 }
 
 // Group forms under their parent Meta campaign. AED-normalised parent rows.
