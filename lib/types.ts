@@ -138,6 +138,18 @@ export type PerfAccount = {
   accessible: boolean;      // false → token can't see it / not yet synced
 };
 
+// ---- Home tab (Spend & Lead Dashboard) ---------------------------------
+// One row per (account × event_type) of Meta spend + Meta-reported leads over
+// a day window. The page rolls these into Overview / Event / Platform / Account.
+export type HomeBreakdownRow = {
+  account_id: string;
+  account_name: string;
+  currency: string | null;
+  event_type: "event" | "non_event";
+  spend: number;   // AED
+  leads: number;   // Meta-reported leads
+};
+
 export type PerfAccountCampaign = {
   campaign_id: string;
   campaign_name: string;

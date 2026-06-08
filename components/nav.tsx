@@ -2,9 +2,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BarChart3, Megaphone, Users2, Building2, TrendingUp, Settings, LogOut, Wallet } from "lucide-react";
+import { Home, BarChart3, Megaphone, Users2, Building2, TrendingUp, Settings, LogOut, Wallet } from "lucide-react";
 
 const links = [
+  { href: "/dashboard/home",        label: "Home",        icon: Home },
   { href: "/dashboard",             label: "Overview",    icon: BarChart3 },
   { href: "/dashboard/accounts",    label: "Accounts",    icon: Wallet },
   { href: "/dashboard/campaigns",   label: "Campaigns",   icon: Megaphone },

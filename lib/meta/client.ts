@@ -44,8 +44,11 @@ async function fetchJson<T>(url: string, token: string, attempt = 1): Promise<T>
     const transient = res.status >= 500 || (typeof code === "number" && TRANSIENT_CODES.has(code));
     // Rate limits get a longer, patient schedule (30s,60s,90s,120s,120s…, up to
     // 10 tries); other transient errors a short exponential one (up to 6 tries).
+    // NOTE: rate-limit codes (e.g. 32, 80004) arrive as HTTP 400 and are NOT in
+    // TRANSIENT_CODES, so the retry gate must check isRateLimit explicitly —
+    // otherwise these would throw immediately with no backoff.
     const maxAttempts = isRateLimit ? 10 : 6;
-    if (transient && attempt < maxAttempts) {
+    if ((transient || isRateLimit) && attempt < maxAttempts) {
       const wait = isRateLimit
         ? Math.min(120000, 30000 * attempt)
         : Math.min(60000, 1000 * 3 ** (attempt - 1));
@@ -198,6 +201,52 @@ export async function getCampaignInsightsMonthly(
 
   const out: FormInsight[] = [];
   for await (const r of paginate<FormInsight>(url.toString(), token)) out.push(r);
+  return out;
+}
+
+/** Split [since, until] into ≤stepDays inclusive date slices. */
+function dateSlices(since: string, until: string, stepDays: number): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  const end = new Date(until);
+  let s = new Date(since);
+  while (s <= end) {
+    const e = new Date(s);
+    e.setDate(e.getDate() + stepDays - 1);
+    out.push([s.toISOString().slice(0, 10), (e > end ? end : e).toISOString().slice(0, 10)]);
+    s = new Date(e);
+    s.setDate(s.getDate() + 1);
+  }
+  return out;
+}
+
+/**
+ * Pull campaign-level insights broken down BY DAY (`time_increment=1`) for a
+ * recent window. Powers the Home tab's exact day-range views (7D/30D/90D/6M).
+ * Only a rolling window is pulled/stored — long-term pages use the monthly grain.
+ *
+ * The window is fetched in 30-day slices: a multi-month daily campaign-level
+ * query is too expensive for large accounts and Meta rejects it with a
+ * transient "Service temporarily unavailable" — small slices are reliable.
+ */
+export async function getCampaignInsightsDaily(
+  accountId: string,
+  token: string,
+  since: string,
+  until: string
+): Promise<FormInsight[]> {
+  const out: FormInsight[] = [];
+  for (const [sStart, sEnd] of dateSlices(since, until, 30)) {
+    const url = new URL(`${BASE}/${accountId}/insights`);
+    url.searchParams.set(
+      "fields",
+      "campaign_id,campaign_name,spend,impressions,clicks,actions,date_start,date_stop"
+    );
+    url.searchParams.set("level", "campaign");
+    url.searchParams.set("time_range", JSON.stringify({ since: sStart, until: sEnd }));
+    url.searchParams.set("time_increment", "1");
+    url.searchParams.set("limit", "500");
+    for await (const r of paginate<FormInsight>(url.toString(), token)) out.push(r);
+  }
   return out;
 }
 

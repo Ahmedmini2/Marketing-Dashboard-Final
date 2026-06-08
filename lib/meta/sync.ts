@@ -3,6 +3,7 @@ import {
   listAdAccounts,
   listCampaigns,
   getCampaignInsightsMonthly,
+  getCampaignInsightsDaily,
   leadsFromActions,
   listPagesWithTokens,
   listPageLeadForms,
@@ -15,11 +16,15 @@ function monthStart(dateStr: string): string {
   return `${(dateStr ?? "").slice(0, 7)}-01`;
 }
 
+// Rolling daily window (days) stored in meta_campaign_daily for the Home tab.
+const DAILY_LOOKBACK = 180;
+
 type SyncStats = {
   ad_accounts: number;
   campaigns: number;
   forms: number;
   insight_rows: number;
+  daily_rows: number;
   form_campaign_matches: number;
   account_errors: Record<string, string>;
 };
@@ -66,9 +71,12 @@ export async function syncMeta(opts?: { since?: string; until?: string }): Promi
 
   const db = supabaseAdmin();
   const stats: SyncStats = {
-    ad_accounts: 0, campaigns: 0, forms: 0, insight_rows: 0,
+    ad_accounts: 0, campaigns: 0, forms: 0, insight_rows: 0, daily_rows: 0,
     form_campaign_matches: 0, account_errors: {},
   };
+
+  // Prune daily rows older than the rolling window so meta_campaign_daily stays bounded.
+  await db.from("meta_campaign_daily").delete().lt("date", todayISO(-(DAILY_LOOKBACK + 5)));
 
   // 1) Per-account: insights + campaigns + insight rows.
   // Each account replaces only its OWN insight rows after a successful pull, so
@@ -197,6 +205,33 @@ async function syncOneAccount(
       }
     }
     stats.insight_rows += rows.length;
+  }
+
+  // --- Daily insights (rolling window) for the Home tab's exact day ranges ---
+  const dailySince = todayISO(-DAILY_LOOKBACK);
+  const daily = await getCampaignInsightsDaily(acct.id, token, dailySince, until);
+  const dailyRows = daily
+    .filter((ins) => ins.campaign_id && ins.date_start)
+    .map((ins) => ({
+      campaign_id: ins.campaign_id!,
+      date: ins.date_start,
+      spend: Number(ins.spend ?? 0),
+      impressions: Number(ins.impressions ?? 0),
+      clicks: Number(ins.clicks ?? 0),
+      leads: leadsFromActions(ins.actions),
+    }));
+  if (dailyRows.length) {
+    const CHUNK = 500;
+    for (let i = 0; i < dailyRows.length; i += CHUNK) {
+      const { error } = await db
+        .from("meta_campaign_daily")
+        .upsert(dailyRows.slice(i, i + CHUNK), { onConflict: "campaign_id,date" });
+      if (error) {
+        stats.account_errors[`${acct.id}:daily`] = error.message;
+        break;
+      }
+    }
+    stats.daily_rows += dailyRows.length;
   }
 }
 

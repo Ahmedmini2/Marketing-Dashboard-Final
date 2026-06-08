@@ -195,30 +195,22 @@ alter function refresh_lead_attribution()  set statement_timeout = '180s';
 -- 4. Overview / Performance RPCs (rewritten to use REAL spend + net comm)
 -- =========================================================================
 
--- All-time / windowed totals (the 4 hero cards)
+-- All-time / windowed totals (the 4 hero cards).
+-- Month-aligned: spend is monthly grain, so leads/revenue are clamped to the
+-- SAME whole months (b.ts_lo/ts_hi) — otherwise a mid-month range would compare
+-- a full month of spend against a partial month of leads/revenue.
 create or replace function dashboard_perf_summary(p_from timestamptz, p_to timestamptz)
 returns table (spend numeric, revenue numeric, pnl numeric, roas numeric, leads bigint, bookings bigint)
 language sql stable as $$
-  with sp as (
-    select coalesce(sum(spend_aed),0)::numeric as spend
-    from v_campaign_month
-    where month >= date_trunc('month', p_from)::date and month <= p_to::date
+  with b as (
+    select date_trunc('month',p_from)::date as m_lo, date_trunc('month',p_to)::date as m_hi,
+           date_trunc('month',p_from) as ts_lo, (date_trunc('month',p_to)+interval '1 month') as ts_hi
   ),
-  rv as (
-    select coalesce(sum(net_commission),0)::numeric as revenue,
-           count(*)::bigint                          as bookings
-    from sf_bookings where booked_at >= p_from and booked_at <= p_to
-  ),
-  ld as (
-    select count(*)::bigint as leads
-    from sf_leads where created_date >= p_from and created_date <= p_to
-  )
-  select
-    round(sp.spend,2),
-    round(rv.revenue,2),
-    round(rv.revenue - sp.spend,2) as pnl,
-    case when sp.spend>0 then round(rv.revenue/sp.spend,4) else 0 end as roas,
-    ld.leads, rv.bookings
+  sp as (select coalesce(sum(spend_aed),0)::numeric spend from v_campaign_month, b where month>=b.m_lo and month<=b.m_hi),
+  rv as (select coalesce(sum(net_commission),0)::numeric revenue, count(*)::bigint bookings from sf_bookings, b where booked_at>=b.ts_lo and booked_at<b.ts_hi),
+  ld as (select count(*)::bigint leads from sf_leads, b where created_date>=b.ts_lo and created_date<b.ts_hi)
+  select round(sp.spend,2), round(rv.revenue,2), round(rv.revenue-sp.spend,2),
+    case when sp.spend>0 then round(rv.revenue/sp.spend,4) else 0 end, ld.leads, rv.bookings
   from sp, rv, ld;
 $$;
 
@@ -371,7 +363,9 @@ $$;
 -- 5. Accounts tab RPCs
 -- =========================================================================
 
--- Per-account rollup over a window
+-- Per-account rollup over a window (month-aligned, like dashboard_perf_summary).
+-- `accessible` is true when the token can see the account (currency captured) OR
+-- it already has synced campaign data — so a data-having account is never hidden.
 create or replace function dashboard_accounts(p_from timestamptz, p_to timestamptz)
 returns table (
   account_id text, account_name text, currency text,
@@ -379,44 +373,33 @@ returns table (
   leads bigint, bookings bigint, campaigns bigint, accessible boolean
 )
 language sql stable as $$
-  with sp as (
-    select cm.account_id,
-           sum(cm.spend_aed)::numeric as spend,
-           count(distinct cm.campaign_id) filter (where cm.spend_aed>0 or cm.meta_leads>0) as campaigns
-    from v_campaign_month cm
-    where cm.month >= date_trunc('month', p_from)::date and cm.month <= p_to::date
-    group by cm.account_id
+  with b as (
+    select date_trunc('month',p_from)::date as m_lo, date_trunc('month',p_to)::date as m_hi,
+           date_trunc('month',p_from) as ts_lo, (date_trunc('month',p_to)+interval '1 month') as ts_hi
   ),
-  ld as (
-    select la.account_id, count(*)::bigint as leads
-    from lead_attribution la
-    where la.created_date >= p_from and la.created_date <= p_to and la.account_id is not null
-    group by la.account_id
+  sp as (
+    select cm.account_id, sum(cm.spend_aed)::numeric spend,
+           count(distinct cm.campaign_id) filter (where cm.spend_aed>0 or cm.meta_leads>0) campaigns
+    from v_campaign_month cm, b where cm.month>=b.m_lo and cm.month<=b.m_hi group by cm.account_id
   ),
-  rv as (
-    select la.account_id, coalesce(sum(sb.net_commission),0)::numeric as revenue, count(*)::bigint as bookings
-    from sf_bookings sb
-    join lead_attribution la on la.lead_id = sb.lead_id
-    where sb.booked_at >= p_from and sb.booked_at <= p_to and la.account_id is not null
-    group by la.account_id
-  )
-  select
-    acct.id, acct.name, acct.currency,
-    round(coalesce(sp.spend,0),2)   as spend,
-    round(coalesce(rv.revenue,0),2) as revenue,
-    round(coalesce(rv.revenue,0) - coalesce(sp.spend,0),2) as pnl,
-    case when coalesce(sp.spend,0)>0 then round(coalesce(rv.revenue,0)/sp.spend,4) else 0 end as roas,
-    coalesce(ld.leads,0)::bigint, coalesce(rv.bookings,0)::bigint,
-    coalesce(sp.campaigns,0)::bigint,
-    (acct.currency is not null) as accessible
+  ld as (select la.account_id, count(*)::bigint leads from lead_attribution la, b where la.created_date>=b.ts_lo and la.created_date<b.ts_hi and la.account_id is not null group by la.account_id),
+  rv as (select la.account_id, coalesce(sum(sb.net_commission),0)::numeric revenue, count(*)::bigint bookings
+         from sf_bookings sb join lead_attribution la on la.lead_id=sb.lead_id, b
+         where sb.booked_at>=b.ts_lo and sb.booked_at<b.ts_hi and la.account_id is not null group by la.account_id)
+  select acct.id, acct.name, acct.currency,
+    round(coalesce(sp.spend,0),2), round(coalesce(rv.revenue,0),2),
+    round(coalesce(rv.revenue,0)-coalesce(sp.spend,0),2),
+    case when coalesce(sp.spend,0)>0 then round(coalesce(rv.revenue,0)/sp.spend,4) else 0 end,
+    coalesce(ld.leads,0)::bigint, coalesce(rv.bookings,0)::bigint, coalesce(sp.campaigns,0)::bigint,
+    (acct.currency is not null or coalesce(sp.campaigns,0)>0)
   from meta_ad_accounts acct
-  left join sp on sp.account_id = acct.id
-  left join ld on ld.account_id = acct.id
-  left join rv on rv.account_id = acct.id
-  order by spend desc;
+  left join sp on sp.account_id=acct.id
+  left join ld on ld.account_id=acct.id
+  left join rv on rv.account_id=acct.id
+  order by round(coalesce(sp.spend,0),2) desc;
 $$;
 
--- Campaigns within one account over a window
+-- Campaigns within one account over a window (month-aligned).
 create or replace function dashboard_account_campaigns(p_account_id text, p_from timestamptz, p_to timestamptz)
 returns table (
   campaign_id text, campaign_name text, status text, event_type text,
@@ -424,58 +407,33 @@ returns table (
   revenue numeric, pnl numeric, roas numeric, cpl numeric
 )
 language sql stable as $$
-  with sp as (
-    select cm.campaign_id, cm.campaign_name,
-           sum(cm.spend_aed)::numeric as spend,
-           sum(cm.meta_leads)::bigint as meta_leads
-    from v_campaign_month cm
-    where cm.account_id = p_account_id
-      and cm.month >= date_trunc('month', p_from)::date and cm.month <= p_to::date
-    group by cm.campaign_id, cm.campaign_name
+  with b as (
+    select date_trunc('month',p_from)::date as m_lo, date_trunc('month',p_to)::date as m_hi,
+           date_trunc('month',p_from) as ts_lo, (date_trunc('month',p_to)+interval '1 month') as ts_hi
   ),
-  ld as (
-    select la.primary_campaign_id as campaign_id, count(*)::bigint as sf_leads
-    from lead_attribution la
-    where la.account_id = p_account_id
-      and la.created_date >= p_from and la.created_date <= p_to
-      and la.primary_campaign_id is not null
-    group by la.primary_campaign_id
-  ),
-  rv as (
-    select la.primary_campaign_id as campaign_id,
-           coalesce(sum(sb.net_commission),0)::numeric as revenue, count(*)::bigint as bookings
-    from sf_bookings sb
-    join lead_attribution la on la.lead_id = sb.lead_id
-    where la.account_id = p_account_id
-      and sb.booked_at >= p_from and sb.booked_at <= p_to
-      and la.primary_campaign_id is not null
-    group by la.primary_campaign_id
-  ),
-  ids as (
-    select campaign_id from sp
-    union select campaign_id from ld
-    union select campaign_id from rv
-  )
-  select
-    i.campaign_id,
-    coalesce(sp.campaign_name, mc.name, '(unknown)')        as campaign_name,
-    mc.status,
-    case when lower(coalesce(sp.campaign_name, mc.name, '')) like '%non%' then 'non_event' else 'event' end,
-    round(coalesce(sp.spend,0),2)        as spend,
-    coalesce(sp.meta_leads,0)::bigint    as meta_leads,
-    coalesce(ld.sf_leads,0)::bigint      as sf_leads,
-    coalesce(rv.bookings,0)::bigint      as bookings,
-    round(coalesce(rv.revenue,0),2)      as revenue,
-    round(coalesce(rv.revenue,0) - coalesce(sp.spend,0),2) as pnl,
-    case when coalesce(sp.spend,0)>0 then round(coalesce(rv.revenue,0)/sp.spend,4) else 0 end as roas,
-    case when coalesce(ld.sf_leads,0)>0 then round(coalesce(sp.spend,0)/ld.sf_leads,2) else 0 end as cpl
+  sp as (select cm.campaign_id, cm.campaign_name, sum(cm.spend_aed)::numeric spend, sum(cm.meta_leads)::bigint meta_leads
+         from v_campaign_month cm, b where cm.account_id=p_account_id and cm.month>=b.m_lo and cm.month<=b.m_hi
+         group by cm.campaign_id, cm.campaign_name),
+  ld as (select la.primary_campaign_id campaign_id, count(*)::bigint sf_leads from lead_attribution la, b
+         where la.account_id=p_account_id and la.created_date>=b.ts_lo and la.created_date<b.ts_hi and la.primary_campaign_id is not null group by la.primary_campaign_id),
+  rv as (select la.primary_campaign_id campaign_id, coalesce(sum(sb.net_commission),0)::numeric revenue, count(*)::bigint bookings
+         from sf_bookings sb join lead_attribution la on la.lead_id=sb.lead_id, b
+         where la.account_id=p_account_id and sb.booked_at>=b.ts_lo and sb.booked_at<b.ts_hi and la.primary_campaign_id is not null group by la.primary_campaign_id),
+  ids as (select campaign_id from sp union select campaign_id from ld union select campaign_id from rv)
+  select i.campaign_id, coalesce(sp.campaign_name, mc.name, '(unknown)'), mc.status,
+    case when lower(coalesce(sp.campaign_name, mc.name,'')) like '%non%' then 'non_event' else 'event' end,
+    round(coalesce(sp.spend,0),2), coalesce(sp.meta_leads,0)::bigint, coalesce(ld.sf_leads,0)::bigint,
+    coalesce(rv.bookings,0)::bigint, round(coalesce(rv.revenue,0),2),
+    round(coalesce(rv.revenue,0)-coalesce(sp.spend,0),2),
+    case when coalesce(sp.spend,0)>0 then round(coalesce(rv.revenue,0)/sp.spend,4) else 0 end,
+    case when coalesce(ld.sf_leads,0)>0 then round(coalesce(sp.spend,0)/ld.sf_leads,2) else 0 end
   from ids i
-  left join sp on sp.campaign_id = i.campaign_id
-  left join ld on ld.campaign_id = i.campaign_id
-  left join rv on rv.campaign_id = i.campaign_id
-  left join meta_campaigns mc on mc.id = i.campaign_id
-  where coalesce(sp.spend,0) > 0 or coalesce(ld.sf_leads,0) > 0 or coalesce(rv.revenue,0) > 0
-  order by spend desc, revenue desc;
+  left join sp on sp.campaign_id=i.campaign_id
+  left join ld on ld.campaign_id=i.campaign_id
+  left join rv on rv.campaign_id=i.campaign_id
+  left join meta_campaigns mc on mc.id=i.campaign_id
+  where coalesce(sp.spend,0)>0 or coalesce(ld.sf_leads,0)>0 or coalesce(rv.revenue,0)>0
+  order by round(coalesce(sp.spend,0),2) desc, round(coalesce(rv.revenue,0),2) desc;
 $$;
 
 -- =========================================================================
@@ -491,55 +449,38 @@ returns table (
   pnl numeric, roi numeric
 )
 language sql stable as $$
-  with sp as (   -- real spend per campaign × month
+  with b as (
+    select date_trunc('month',p_from)::date as m_lo, date_trunc('month',p_to)::date as m_hi,
+           date_trunc('month',p_from) as ts_lo, (date_trunc('month',p_to)+interval '1 month') as ts_hi
+  ),
+  sp as (   -- real spend per campaign × month
     select cm.campaign_id as cid, cm.campaign_name, cm.month, cm.spend_aed as spend
-    from v_campaign_month cm
-    where cm.month >= date_trunc('month', p_from)::date and cm.month <= p_to::date
+    from v_campaign_month cm, b where cm.month>=b.m_lo and cm.month<=b.m_hi
   ),
-  ld as (        -- matched leads per campaign × created-month
-    select coalesce(la.primary_campaign_id,'(none)') as cid,
-           date_trunc('month', la.created_date)::date as month,
-           count(*)::bigint as leads
-    from lead_attribution la
-    where la.created_date >= p_from and la.created_date <= p_to
-    group by 1,2
+  ld as (   -- matched leads per campaign × created-month
+    select coalesce(la.primary_campaign_id,'(none)') as cid, date_trunc('month',la.created_date)::date as month, count(*)::bigint as leads
+    from lead_attribution la, b where la.created_date>=b.ts_lo and la.created_date<b.ts_hi group by 1,2
   ),
-  bk as (        -- booking financials per campaign × booked-month
-    select coalesce(la.primary_campaign_id,'(none)') as cid,
-           date_trunc('month', sb.booked_at)::date as month,
-           sum(sb.sale_amount)::numeric      as unit_price,
-           sum(sb.gross_commission)::numeric as gross_commission,
-           sum(sb.net_commission)::numeric   as net_commission
-    from sf_bookings sb
-    left join lead_attribution la on la.lead_id = sb.lead_id
-    where sb.booked_at >= p_from and sb.booked_at <= p_to
-    group by 1,2
+  bk as (   -- booking financials per campaign × booked-month
+    select coalesce(la.primary_campaign_id,'(none)') as cid, date_trunc('month',sb.booked_at)::date as month,
+           sum(sb.sale_amount)::numeric unit_price, sum(sb.gross_commission)::numeric gross_commission, sum(sb.net_commission)::numeric net_commission
+    from sf_bookings sb left join lead_attribution la on la.lead_id=sb.lead_id, b
+    where sb.booked_at>=b.ts_lo and sb.booked_at<b.ts_hi group by 1,2
   ),
-  keys as (
-    select coalesce(cid,'(none)') as cid, month from sp
-    union select cid, month from ld
-    union select cid, month from bk
-  )
-  select
-    to_char(k.month,'YYYY-MM') as month,
-    case when k.cid = '(none)' then '(unattributed)'
-         else coalesce(mc.name, sp.campaign_name, '(unknown)') end as campaign_name,
-    case when lower(coalesce(mc.name, sp.campaign_name, '')) like '%non%'
-         then 'non_event' else 'event' end as event_type,
-    round(coalesce(sp.spend,0),2)                                   as spend,
-    coalesce(ld.leads,0)::bigint                                    as leads,
-    case when coalesce(ld.leads,0)>0 then round(coalesce(sp.spend,0)/ld.leads,2) else 0 end as cpl,
-    round(coalesce(bk.unit_price,0),2)                             as unit_price,
-    round(coalesce(bk.gross_commission,0),2)                       as gross_commission,
-    round(coalesce(bk.net_commission,0),2)                         as net_commission,
-    round(coalesce(bk.net_commission,0) - coalesce(sp.spend,0),2)  as pnl,
-    case when coalesce(sp.spend,0)>0
-         then round((coalesce(bk.net_commission,0) - sp.spend)/sp.spend,4) else 0 end as roi
+  keys as (select coalesce(cid,'(none)') cid, month from sp union select cid, month from ld union select cid, month from bk)
+  select to_char(k.month,'YYYY-MM'),
+    case when k.cid='(none)' then '(unattributed)' else coalesce(mc.name, sp.campaign_name, '(unknown)') end,
+    case when lower(coalesce(mc.name, sp.campaign_name,'')) like '%non%' then 'non_event' else 'event' end,
+    round(coalesce(sp.spend,0),2), coalesce(ld.leads,0)::bigint,
+    case when coalesce(ld.leads,0)>0 then round(coalesce(sp.spend,0)/ld.leads,2) else 0 end,
+    round(coalesce(bk.unit_price,0),2), round(coalesce(bk.gross_commission,0),2), round(coalesce(bk.net_commission,0),2),
+    round(coalesce(bk.net_commission,0)-coalesce(sp.spend,0),2),
+    case when coalesce(sp.spend,0)>0 then round((coalesce(bk.net_commission,0)-sp.spend)/sp.spend,4) else 0 end
   from keys k
-  left join sp on coalesce(sp.cid,'(none)') = k.cid and sp.month = k.month
-  left join ld on ld.cid = k.cid and ld.month = k.month
-  left join bk on bk.cid = k.cid and bk.month = k.month
-  left join meta_campaigns mc on mc.id = k.cid and k.cid <> '(none)'
-  where coalesce(sp.spend,0) > 0 or coalesce(ld.leads,0) > 0 or coalesce(bk.net_commission,0) <> 0
+  left join sp on coalesce(sp.cid,'(none)')=k.cid and sp.month=k.month
+  left join ld on ld.cid=k.cid and ld.month=k.month
+  left join bk on bk.cid=k.cid and bk.month=k.month
+  left join meta_campaigns mc on mc.id=k.cid and k.cid<>'(none)'
+  where coalesce(sp.spend,0)>0 or coalesce(ld.leads,0)>0 or coalesce(bk.net_commission,0)<>0
   order by k.month desc, coalesce(sp.spend,0) desc;
 $$;

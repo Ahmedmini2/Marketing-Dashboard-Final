@@ -12,6 +12,7 @@ import type {
   PerfMonthlyTrendPoint,
   PerfAccount,
   PerfAccountCampaign,
+  HomeBreakdownRow,
 } from "@/lib/types";
 import type { Group } from "@/components/grouped-data-table";
 import type { SortKey } from "@/lib/filters";
@@ -406,6 +407,25 @@ export async function fetchPerfMonthlyTrend(
     revenue: Number(r.revenue ?? 0),
     pnl:     Number(r.pnl     ?? 0),
   } satisfies PerfMonthlyTrendPoint));
+}
+
+// =========================================================================
+// Home tab (Spend & Lead Dashboard) — daily grain, Meta-reported leads
+// =========================================================================
+
+/** Per (account × event_type) spend + Meta leads over an inclusive day window. */
+export async function fetchHomeBreakdown(from: string, to: string): Promise<HomeBreakdownRow[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_home_breakdown", { p_from: from, p_to: to });
+  if (error) throw new Error(`dashboard_home_breakdown: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    account_id:   String(r.account_id ?? ""),
+    account_name: String(r.account_name ?? r.account_id ?? "(unknown)"),
+    currency:     r.currency ?? null,
+    event_type:   r.event_type === "non_event" ? "non_event" : "event",
+    spend:        Number(r.spend_aed ?? 0),
+    leads:        Number(r.leads ?? 0),
+  } satisfies HomeBreakdownRow));
 }
 
 // =========================================================================
