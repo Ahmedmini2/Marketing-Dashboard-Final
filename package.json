@@ -16,7 +16,7 @@
     "date-fns": "^4.1.0",
     "jsforce": "^3.6.3",
     "lucide-react": "^0.460.0",
-    "next": "15.0.3",
+    "next": "^15.5.19",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^2.13.3",
