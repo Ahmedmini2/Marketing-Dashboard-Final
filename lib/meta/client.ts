@@ -267,12 +267,10 @@ export async function getCampaignLeadForms(
 
 export function leadsFromActions(actions?: FormInsight["actions"]): number {
   if (!actions) return 0;
-  const types = new Set([
-    "lead",
-    "leadgen.other",
-    "onsite_conversion.lead_grouped",
-  ]);
+  // Meta returns the same lead count under BOTH `lead` and
+  // `onsite_conversion.lead_grouped` — summing them doubles the real lead
+  // count. The canonical action type for Lead Ad form submissions is "lead".
   return actions
-    .filter((a) => types.has(a.action_type))
+    .filter((a) => a.action_type === "lead")
     .reduce((sum, a) => sum + Number(a.value || 0), 0);
 }

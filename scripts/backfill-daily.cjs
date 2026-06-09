@@ -21,8 +21,11 @@ function isoDaysAgo(n) {
 }
 function leadsFromActions(actions) {
   if (!actions) return 0;
-  const t = new Set(["lead", "leadgen.other", "onsite_conversion.lead_grouped"]);
-  return actions.filter((a) => t.has(a.action_type)).reduce((s, a) => s + Number(a.value || 0), 0);
+  // Only `lead` — Meta also returns `onsite_conversion.lead_grouped` with the
+  // same count, which would double-count.
+  return actions
+    .filter((a) => a.action_type === "lead")
+    .reduce((s, a) => s + Number(a.value || 0), 0);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Retry transient (code 1/2) + rate-limit (code 4) errors with backoff.
