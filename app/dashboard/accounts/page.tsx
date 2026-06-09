@@ -1,9 +1,16 @@
 import { KpiCard } from "@/components/kpi-card";
 import { SyncButton } from "@/components/sync-button";
+import { FilterBar } from "@/components/filter-bar";
 import { DataTable, type Column } from "@/components/data-table";
-import { fetchAccounts, fetchAccountCampaigns } from "@/lib/aggregations";
+import {
+  fetchAccounts,
+  fetchAccountCampaigns,
+  fetchAccountsDaily,
+  fetchAccountCampaignsDaily,
+} from "@/lib/aggregations";
 import { getLastSync } from "@/lib/filter-options";
-import { fmtMoney, fmtNum } from "@/lib/utils";
+import { parseFilters, type SearchParams } from "@/lib/filters";
+import { fmtMoney, fmtNum, todayISO } from "@/lib/utils";
 import type { PerfAccountCampaign } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -15,22 +22,47 @@ function roasLabel(r: number) {
 const campCols: Column<PerfAccountCampaign>[] = [
   { key: "campaign_name", header: "Campaign" },
   { key: "status",        header: "Status", fallback: "—" },
-  { key: "spend",         header: "Spend",     align: "right", format: "money" },
+  { key: "spend",         header: "Spend",      align: "right", format: "money" },
   { key: "meta_leads",    header: "Meta Leads", align: "right", format: "num" },
   { key: "sf_leads",      header: "SF Leads",   align: "right", format: "num" },
-  { key: "cpl",           header: "CPL",       align: "right", format: "money" },
-  { key: "bookings",      header: "Bookings",  align: "right", format: "num" },
-  { key: "revenue",       header: "Revenue",   align: "right", format: "money" },
-  { key: "pnl",           header: "P&L",       align: "right", format: "money_pl" },
-  { key: "roas",          header: "ROAS",      align: "right", format: "ratio_x" },
+  { key: "cpl",           header: "CPL",        align: "right", format: "money" },
+  { key: "bookings",      header: "Bookings",   align: "right", format: "num" },
+  { key: "revenue",       header: "Revenue",    align: "right", format: "money" },
+  { key: "pnl",           header: "P&L",        align: "right", format: "money_pl" },
+  { key: "roas",          header: "ROAS",       align: "right", format: "ratio_x" },
 ];
 
-export default async function AccountsPage() {
-  const [accounts, lastSync] = await Promise.all([fetchAccounts(), getLastSync()]);
+// 180-day rolling daily window. Within it → use day-precision RPCs (real
+// 7D/10D/14D spend). Outside it → fall back to the monthly-aligned RPCs.
+const DAILY_WINDOW_DAYS = 180;
 
-  // Pull each accessible account's campaign breakdown in parallel.
+export default async function AccountsPage({
+  searchParams,
+}: {
+  searchParams: Promise<SearchParams>;
+}) {
+  const sp = await searchParams;
+  const filters = parseFilters(sp);
+  const range = filters.range;
+
+  const dailyCutoff = todayISO(-DAILY_WINDOW_DAYS);
+  const useDaily = range.from >= dailyCutoff;
+
+  const [accounts, lastSync] = await Promise.all([
+    useDaily ? fetchAccountsDaily(range.from, range.to) : fetchAccounts(range),
+    getLastSync(),
+  ]);
+
+  // Pull each accessible account's campaign breakdown in parallel, using the
+  // matching RPC family.
   const campaignsByAccount = await Promise.all(
-    accounts.map((a) => (a.accessible ? fetchAccountCampaigns(a.account_id) : Promise.resolve([]))),
+    accounts.map((a) =>
+      a.accessible
+        ? useDaily
+          ? fetchAccountCampaignsDaily(a.account_id, range.from, range.to)
+          : fetchAccountCampaigns(a.account_id, range)
+        : Promise.resolve([]),
+    ),
   );
 
   return (
@@ -39,11 +71,14 @@ export default async function AccountsPage() {
         <div>
           <h1 className="text-2xl font-semibold">Accounts</h1>
           <p className="text-sm text-muted mt-0.5">
-            Spend, revenue &amp; P&amp;L per ad account · all-time · Revenue = Net Commission
+            Spend, revenue &amp; P&amp;L per ad account · Revenue = Net Commission
+            {useDaily ? " · day-level" : " · month-level"}
           </p>
         </div>
         <SyncButton lastSyncedAt={lastSync} />
       </div>
+
+      <FilterBar campaigns={[]} agents={[]} teams={[]} dateOnly />
 
       {accounts.length === 0 && (
         <div className="panel p-8 text-center text-muted">No ad accounts synced yet.</div>
@@ -79,7 +114,7 @@ export default async function AccountsPage() {
               rows={camps}
               columns={campCols}
               pageSize={10}
-              empty={a.accessible ? "No campaign activity in this account." : "Account not yet synced."}
+              empty={a.accessible ? "No campaign activity in this range." : "Account not yet synced."}
             />
           </section>
         );

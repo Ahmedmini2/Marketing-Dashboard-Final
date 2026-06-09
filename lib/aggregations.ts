@@ -455,6 +455,58 @@ export async function fetchAccounts(range?: DateRange): Promise<PerfAccount[]> {
   } satisfies PerfAccount));
 }
 
+/**
+ * Day-precision per-account rollup (uses meta_campaign_daily). Use this for
+ * ranges fully inside the 180-day daily window — gives accurate 7D/10D/14D
+ * spend, instead of the whole containing months. Outside the daily window,
+ * call fetchAccounts (monthly grain) instead.
+ */
+export async function fetchAccountsDaily(from: string, to: string): Promise<PerfAccount[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_accounts_daily", { p_from: from, p_to: to });
+  if (error) throw new Error(`dashboard_accounts_daily: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    account_id:   String(r.account_id ?? ""),
+    account_name: String(r.account_name ?? r.account_id ?? "(unknown)"),
+    currency:     r.currency ?? null,
+    spend:        Number(r.spend    ?? 0),
+    revenue:      Number(r.revenue  ?? 0),
+    pnl:          Number(r.pnl      ?? 0),
+    roas:         Number(r.roas     ?? 0),
+    leads:        Number(r.leads    ?? 0),
+    bookings:     Number(r.bookings ?? 0),
+    campaigns:    Number(r.campaigns ?? 0),
+    accessible:   Boolean(r.accessible),
+  } satisfies PerfAccount));
+}
+
+/** Day-precision per-campaign rollup for one account. */
+export async function fetchAccountCampaignsDaily(
+  accountId: string,
+  from: string,
+  to: string,
+): Promise<PerfAccountCampaign[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_account_campaigns_daily", {
+    p_account_id: accountId, p_from: from, p_to: to,
+  });
+  if (error) throw new Error(`dashboard_account_campaigns_daily: ${error.message}`);
+  return ((data ?? []) as any[]).map((r) => ({
+    campaign_id:   String(r.campaign_id ?? ""),
+    campaign_name: String(r.campaign_name ?? "(unknown)"),
+    status:        r.status ?? null,
+    event_type:    r.event_type === "non_event" ? "non_event" : "event",
+    spend:         Number(r.spend      ?? 0),
+    meta_leads:    Number(r.meta_leads ?? 0),
+    sf_leads:      Number(r.sf_leads   ?? 0),
+    bookings:      Number(r.bookings   ?? 0),
+    revenue:       Number(r.revenue    ?? 0),
+    pnl:           Number(r.pnl        ?? 0),
+    roas:          Number(r.roas       ?? 0),
+    cpl:           Number(r.cpl        ?? 0),
+  } satisfies PerfAccountCampaign));
+}
+
 /** Campaigns within one account over a date window (defaults to all-time). */
 export async function fetchAccountCampaigns(
   accountId: string,

@@ -1,11 +1,21 @@
 "use client";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { todayISO } from "@/lib/utils";
+import { cn, todayISO } from "@/lib/utils";
 
 type Option = { id: string; name: string };
 
-export function FilterBar(props: { campaigns: Option[]; agents: Option[]; teams: Option[]; }) {
+// Date presets shared across all dashboard tabs.
+const PRESETS: { days: number; label: string }[] = [
+  { days: 7,    label: "7D" },
+  { days: 10,   label: "10D" },
+  { days: 14,   label: "14D" },
+  { days: 30,   label: "Month" },
+  { days: 90,   label: "Quarter" },
+  { days: 1095, label: "All" },
+];
+
+export function FilterBar(props: { campaigns: Option[]; agents: Option[]; teams: Option[]; dateOnly?: boolean; }) {
   return (
     <Suspense fallback={<div className="panel p-3 h-20" />}>
       <FilterBarInner {...props} />
@@ -14,11 +24,12 @@ export function FilterBar(props: { campaigns: Option[]; agents: Option[]; teams:
 }
 
 function FilterBarInner({
-  campaigns, agents, teams,
+  campaigns, agents, teams, dateOnly = false,
 }: {
   campaigns: Option[];
   agents: Option[];
   teams: Option[];
+  dateOnly?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -91,13 +102,27 @@ function FilterBarInner({
         <div className="kpi-label">To</div>
         <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
       </div>
-      <div className="flex gap-1">
-        {[7, 30, 90, 365].map((d) => (
-          <button key={d} type="button" className="btn" onClick={() => preset(d)}>{d >= 365 ? "1y" : `${d}d`}</button>
-        ))}
-        <button type="button" className="btn" onClick={() => preset(1095)}>All</button>
+      <div className="flex gap-1 flex-wrap">
+        {PRESETS.map((p) => {
+          const isToday = mounted && to === todayISO(0);
+          const spanDays = mounted && from && to
+            ? Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1
+            : 0;
+          const active = isToday && spanDays === p.days;
+          return (
+            <button
+              key={p.days}
+              type="button"
+              className={cn("btn", active && "btn-primary")}
+              onClick={() => preset(p.days)}
+            >
+              {p.label}
+            </button>
+          );
+        })}
       </div>
 
+      {!dateOnly && <>
       <div className="min-w-56">
         <div className="kpi-label">Campaign / Form</div>
         <select className="input w-full" value={campaignId} onChange={(e) => setCampaignId(e.target.value)}>
@@ -154,6 +179,7 @@ function FilterBarInner({
         />
         Include $0-spend forms
       </label>
+      </>}
     </div>
   );
 }
