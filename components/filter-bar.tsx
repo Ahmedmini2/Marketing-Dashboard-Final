@@ -5,14 +5,18 @@ import { cn, todayISO } from "@/lib/utils";
 
 type Option = { id: string; name: string };
 
-// Date presets shared across all dashboard tabs.
-const PRESETS: { days: number; label: string }[] = [
-  { days: 7,    label: "7D" },
-  { days: 10,   label: "10D" },
-  { days: 14,   label: "14D" },
-  { days: 30,   label: "Month" },
-  { days: 90,   label: "Quarter" },
-  { days: 1095, label: "All" },
+// Date presets shared across all dashboard tabs. Each preset spans
+// [todayISO(from), todayISO(to)] inclusive — so "Today" is 1 day, "7D" is
+// the last 7 calendar days ending today, etc.
+const PRESETS: { label: string; from: number; to: number }[] = [
+  { label: "Today",     from: 0,     to: 0  },
+  { label: "Yesterday", from: -1,    to: -1 },
+  { label: "7D",        from: -6,    to: 0  },
+  { label: "10D",       from: -9,    to: 0  },
+  { label: "14D",       from: -13,   to: 0  },
+  { label: "Month",     from: -29,   to: 0  },
+  { label: "Quarter",   from: -89,   to: 0  },
+  { label: "All",       from: -1094, to: 0  },
 ];
 
 export function FilterBar(props: { campaigns: Option[]; agents: Option[]; teams: Option[]; dateOnly?: boolean; }) {
@@ -87,9 +91,9 @@ function FilterBarInner({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, from, to, campaignId, agentId, teamId, sort, minSpend, showNoSpend]);
 
-  function preset(days: number) {
-    setFrom(todayISO(-days));
-    setTo(todayISO(0));
+  function preset(p: (typeof PRESETS)[number]) {
+    setFrom(todayISO(p.from));
+    setTo(todayISO(p.to));
   }
 
   return (
@@ -104,17 +108,13 @@ function FilterBarInner({
       </div>
       <div className="flex gap-1 flex-wrap">
         {PRESETS.map((p) => {
-          const isToday = mounted && to === todayISO(0);
-          const spanDays = mounted && from && to
-            ? Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86400000) + 1
-            : 0;
-          const active = isToday && spanDays === p.days;
+          const active = mounted && from === todayISO(p.from) && to === todayISO(p.to);
           return (
             <button
-              key={p.days}
+              key={p.label}
               type="button"
               className={cn("btn", active && "btn-primary")}
-              onClick={() => preset(p.days)}
+              onClick={() => preset(p)}
             >
               {p.label}
             </button>

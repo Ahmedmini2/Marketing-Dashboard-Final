@@ -2,11 +2,15 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 
-const PRESETS = [
-  { label: "7D", days: 7 },
-  { label: "30D", days: 30 },
-  { label: "90D", days: 90 },
-  { label: "6M", days: 180 },
+// from/to are day offsets from today (0 = today, -1 = yesterday, -6 = 6 days
+// ago). "Today" spans 1 day; "7D" = the last 7 calendar days ending today.
+const PRESETS: { label: string; from: number; to: number }[] = [
+  { label: "Today",     from: 0,    to: 0  },
+  { label: "Yesterday", from: -1,   to: -1 },
+  { label: "7D",        from: -6,   to: 0  },
+  { label: "30D",       from: -29,  to: 0  },
+  { label: "90D",       from: -89,  to: 0  },
+  { label: "6M",        from: -179, to: 0  },
 ];
 
 // Build YYYY-MM-DD from LOCAL components (toISOString is UTC and would drift the
@@ -14,10 +18,10 @@ const PRESETS = [
 function iso(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
-function daysAgo(n: number) {
+function offsetIso(n: number) {
   const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d;
+  d.setDate(d.getDate() + n);
+  return iso(d);
 }
 
 function Inner() {
@@ -27,45 +31,42 @@ function Inner() {
 
   const [from, setFrom] = useState(params.get("from") ?? "");
   const [to, setTo] = useState(params.get("to") ?? "");
-  const [activeDays, setActiveDays] = useState<number | null>(Number(params.get("days")) || 30);
 
   // Defer "today" defaults to the client to avoid SSR/CSR hydration mismatches.
-  // Honour ?days=N so a days-only URL keeps inputs + preset highlight consistent.
   useEffect(() => {
     const d = Number(params.get("days")) || 30;
-    if (!params.get("from")) setFrom(iso(daysAgo(d - 1)));
-    if (!params.get("to")) setTo(iso(new Date()));
+    if (!params.get("from")) setFrom(offsetIso(-(d - 1)));
+    if (!params.get("to")) setTo(offsetIso(0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function push(f: string, t: string, days: number | null) {
+  function push(f: string, t: string) {
     const sp = new URLSearchParams();
     sp.set("from", f);
     sp.set("to", t);
-    if (days) sp.set("days", String(days));
     router.push(`${pathname}?${sp.toString()}`);
   }
-  function preset(days: number) {
-    const f = iso(daysAgo(days - 1));
-    const t = iso(new Date());
+  function applyPreset(p: (typeof PRESETS)[number]) {
+    const f = offsetIso(p.from);
+    const t = offsetIso(p.to);
     setFrom(f);
     setTo(t);
-    setActiveDays(days);
-    push(f, t, days);
+    push(f, t);
   }
   function onDate(f: string, t: string) {
-    setActiveDays(null);
-    if (f && t) push(f, t, null);
+    if (f && t) push(f, t);
   }
+  const isActive = (p: (typeof PRESETS)[number]) =>
+    Boolean(from) && Boolean(to) && from === offsetIso(p.from) && to === offsetIso(p.to);
 
   return (
     <div className="controls">
       <div className="presets">
         {PRESETS.map((p) => (
           <button
-            key={p.days}
-            className={activeDays === p.days ? "active" : ""}
-            onClick={() => preset(p.days)}
+            key={p.label}
+            className={isActive(p) ? "active" : ""}
+            onClick={() => applyPreset(p)}
           >
             {p.label}
           </button>

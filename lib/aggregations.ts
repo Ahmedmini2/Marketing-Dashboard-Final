@@ -13,6 +13,7 @@ import type {
   PerfAccount,
   PerfAccountCampaign,
   HomeBreakdownRow,
+  CampaignsAllRow,
 } from "@/lib/types";
 import type { Group } from "@/components/grouped-data-table";
 import type { SortKey } from "@/lib/filters";
@@ -453,6 +454,48 @@ export async function fetchAccounts(range?: DateRange): Promise<PerfAccount[]> {
     campaigns:    Number(r.campaigns ?? 0),
     accessible:   Boolean(r.accessible),
   } satisfies PerfAccount));
+}
+
+// =========================================================================
+// Campaigns tab (one row per Meta campaign, across all accounts)
+// =========================================================================
+
+function mapCampaignsAllRow(r: any): CampaignsAllRow {
+  return {
+    account_id:    String(r.account_id ?? ""),
+    account_name:  String(r.account_name ?? r.account_id ?? "(unknown)"),
+    currency:      r.currency ?? null,
+    campaign_id:   String(r.campaign_id ?? ""),
+    campaign_name: String(r.campaign_name ?? "(unknown)"),
+    status:        r.status ?? null,
+    event_type:    r.event_type === "non_event" ? "non_event" : "event",
+    spend:         Number(r.spend      ?? 0),
+    meta_leads:    Number(r.meta_leads ?? 0),
+    sf_leads:      Number(r.sf_leads   ?? 0),
+    bookings:      Number(r.bookings   ?? 0),
+    revenue:       Number(r.revenue    ?? 0),
+    pnl:           Number(r.pnl        ?? 0),
+    roas:          Number(r.roas       ?? 0),
+    cpl:           Number(r.cpl        ?? 0),
+  };
+}
+
+/** Day-precision per-campaign rollup across all accounts. */
+export async function fetchCampaignsAllDaily(from: string, to: string): Promise<CampaignsAllRow[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_campaigns_all_daily", { p_from: from, p_to: to });
+  if (error) throw new Error(`dashboard_campaigns_all_daily: ${error.message}`);
+  return ((data ?? []) as any[]).map(mapCampaignsAllRow);
+}
+
+/** Monthly fallback for ranges beyond the daily window (e.g. "All"). */
+export async function fetchCampaignsAllMonthly(range: DateRange): Promise<CampaignsAllRow[]> {
+  const db = supabaseAdmin();
+  const { data, error } = await db.rpc("dashboard_campaigns_all_monthly", {
+    p_from: range.from, p_to: `${range.to}T23:59:59.999Z`,
+  });
+  if (error) throw new Error(`dashboard_campaigns_all_monthly: ${error.message}`);
+  return ((data ?? []) as any[]).map(mapCampaignsAllRow);
 }
 
 /**

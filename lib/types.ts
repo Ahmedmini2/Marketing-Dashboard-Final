@@ -150,6 +150,25 @@ export type HomeBreakdownRow = {
   leads: number;   // Meta-reported leads
 };
 
+// One row per Meta campaign across ALL accounts (powers the Campaigns tab).
+export type CampaignsAllRow = {
+  account_id: string;
+  account_name: string;
+  currency: string | null;
+  campaign_id: string;
+  campaign_name: string;       // Meta campaign name
+  status: string | null;
+  event_type: "event" | "non_event";
+  spend: number;
+  meta_leads: number;
+  sf_leads: number;
+  bookings: number;
+  revenue: number;
+  pnl: number;
+  roas: number;
+  cpl: number;
+};
+
 export type PerfAccountCampaign = {
   campaign_id: string;
   campaign_name: string;
