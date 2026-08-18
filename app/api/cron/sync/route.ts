@@ -1,14 +1,21 @@
 import { NextResponse } from "next/server";
+import { startSyncAll } from "@/lib/sync/runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
 
 /**
- * Vercel cron / Supabase pg_cron entrypoint.
- * Hits /api/sync/all with the SYNC_SECRET header so it bypasses auth.
- * Schedule (vercel.json): { "crons": [{ "path": "/api/cron/sync", "schedule": "0 H/6 * * *" }] }
- * (replace H with star — escaping star-slash inside a block comment)
+ * Scheduled-sync entrypoint (Vercel cron, Supabase pg_cron, or any external
+ * scheduler hitting this with `Authorization: Bearer $SYNC_SECRET`).
+ *
+ * Starts the sync and returns the job id immediately — it does NOT wait for the
+ * ~12-minute run to finish, so schedulers with short HTTP timeouts won't record
+ * a failure for a sync that is in fact progressing. Poll
+ * GET /api/sync/status?id=<jobId> for the outcome.
+ *
+ * This calls the runner directly rather than looping back through
+ * POST /api/sync/all: the extra internal request bought nothing and gave the
+ * proxy another chance to mangle the response.
  */
 export async function GET(req: Request) {
   const expected = process.env.SYNC_SECRET;
@@ -21,11 +28,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
-  const url = new URL("/api/sync/all", req.url);
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { authorization: `Bearer ${expected}` },
-  });
-  const body = await r.json().catch(() => ({}));
-  return NextResponse.json(body, { status: r.status });
+  try {
+    const { jobId, alreadyRunning } = await startSyncAll(null);
+    return NextResponse.json(
+      { ok: true, jobId, status: "running", alreadyRunning },
+      { status: 202 }
+    );
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message ?? String(e) }, { status: 500 });
+  }
 }

@@ -55,12 +55,54 @@ every render — a single "Sync now" button (and an optional cron) refreshes it.
    ```
    Open `http://localhost:3000` → sign up → connect Salesforce → click **Sync now**.
 
+## How a sync runs
+
+A full sync takes **9–17 minutes** (5 Meta ad accounts × 3 years of monthly insights + a
+180-day daily window, then ~226K Salesforce leads). That is far longer than any proxy will
+hold a connection open, so the sync does **not** run inside the request:
+
+```
+POST /api/sync/all      → 202 { jobId }        (returns in milliseconds)
+                          ↓ work continues on the container
+GET  /api/sync/status?id=<jobId>               (UI polls every 5s)
+                          ↓
+sync_jobs.status → 'success' | 'error'
+```
+
+`lib/sync/runner.ts` owns the background run. It stamps `sync_jobs.heartbeat_at` every 15s,
+so a job whose runner died (container restart, redeploy mid-sync) is distinguishable from a
+slow one and gets closed out by `sweep_stale_sync_jobs()` after 5 minutes instead of sitting
+at `running` forever.
+
+Only one sync runs at a time — starting a second joins the one in flight. Concurrent syncs
+used to rate-limit each other on the Meta API and inflate run times.
+
+> **Why it's built this way:** the sync used to be awaited inside the request. Railway's edge
+> proxy cut the client connection minutes before the work finished and answered with the
+> plaintext body `upstream error`; the dashboard called `r.json()` on it and displayed
+> `Unexpected token 'u', "upstream error" is not valid JSON`. The syncs were succeeding the
+> whole time — only the reporting was broken.
+
 ## Scheduled syncs
 
-`vercel.json` registers a 6-hour cron that hits `/api/cron/sync`. That route forwards to
-`/api/sync/all` using `SYNC_SECRET`, so it works unattended. You can also call it from
-Supabase pg_cron or any external scheduler — POST `/api/sync/all` with
-`Authorization: Bearer $SYNC_SECRET`.
+**On Railway** (where this is deployed), add a **cron service** in the same project:
+
+- Root directory: this repo
+- Start command: `node scripts/trigger-sync.cjs`
+- Cron schedule: `0 */6 * * *`
+- Variables: `APP_URL` (the public dashboard URL) and `SYNC_SECRET` (matching the app's)
+
+The script triggers `/api/cron/sync` and then polls until the job finishes, so the Railway
+run's duration and exit code reflect the actual sync rather than just its acceptance.
+
+Any other scheduler works too — GET `/api/cron/sync` (or POST `/api/sync/all`) with
+`Authorization: Bearer $SYNC_SECRET`. Both return `202 { jobId }` immediately; poll
+`/api/sync/status?id=<jobId>` for the result.
+
+> There is no `vercel.json` any more. It registered a 6-hour cron that only Vercel honours,
+> so on Railway it never fired once — every run in `sync_jobs` was a manual "Sync now" click.
+> If you move back to Vercel, note that the sync outlives even the 800s function ceiling, so
+> the cron would need to trigger an external worker rather than run the sync itself.
 
 ## Filters
 
