@@ -16,6 +16,18 @@ export default async function IntegrationsPage() {
 
   const metaConfigured = !!process.env.META_ACCESS_TOKEN;
 
+  // Per-source problems live inside sync_jobs.stats, where they used to be
+  // invisible: a sync that skips a broken record or a rate-limited ad account
+  // still finishes 'success', and the Detail column truncates the stats JSON.
+  // Surface them explicitly so a partial sync is noticed without reading blobs.
+  const latestWithStats = (jobs ?? []).find((j: any) => j.stats);
+  const rejectedBookings: Array<{ id: string; field: string; value: string }> =
+    latestWithStats?.stats?.salesforce?.rejected_bookings ?? [];
+  const metaAccountErrors: Array<[string, string]> = Object.entries(
+    (latestWithStats?.stats?.meta?.account_errors ?? {}) as Record<string, string>
+  );
+  const hasWarnings = rejectedBookings.length > 0 || metaAccountErrors.length > 0;
+
   return (
     <>
       <div className="flex items-center justify-between">
@@ -77,6 +89,54 @@ export default async function IntegrationsPage() {
           )}
         </div>
       </section>
+
+      {/* DATA WARNINGS ------------------------------------------------ */}
+      {hasWarnings && (
+        <section className="panel p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold">Data warnings</h2>
+            <span className="text-xs px-2 py-1 rounded bg-bad/15 text-bad">
+              from the last sync
+            </span>
+          </div>
+
+          {rejectedBookings.length > 0 && (
+            <div className="text-sm space-y-1">
+              <div className="text-muted">
+                {rejectedBookings.length} booking{rejectedBookings.length === 1 ? "" : "s"} skipped —
+                the value is too large for the dashboard to store and needs fixing in Salesforce:
+              </div>
+              <ul className="space-y-1">
+                {rejectedBookings.map((b) => (
+                  <li key={`${b.id}-${b.field}`} className="flex justify-between gap-4">
+                    <span className="font-mono text-xs">{b.id}</span>
+                    <span className="text-muted truncate">
+                      {b.field} = {b.value}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {metaAccountErrors.length > 0 && (
+            <div className="text-sm space-y-1">
+              <div className="text-muted">
+                {metaAccountErrors.length} Meta ad account
+                {metaAccountErrors.length === 1 ? "" : "s"} did not sync:
+              </div>
+              <ul className="space-y-1">
+                {metaAccountErrors.map(([acct, message]) => (
+                  <li key={acct} className="flex justify-between gap-4">
+                    <span className="font-mono text-xs">{acct}</span>
+                    <span className="text-muted truncate">{message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* SYNC HISTORY ------------------------------------------------- */}
       <section className="panel p-5">
